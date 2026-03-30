@@ -6,6 +6,8 @@ const layerPoints = document.getElementById('layer-points');
 // Controls
 const ringsSlider = document.getElementById('ringsSlider');
 const ringsValue = document.getElementById('ringsValue');
+const laneWidthSlider = document.getElementById('laneWidthSlider');
+const laneWidthValue = document.getElementById('laneWidthValue');
 const linesOpacitySlider = document.getElementById('linesOpacitySlider');
 const linesOpacityValue = document.getElementById('linesOpacityValue');
 const sizeSlider = document.getElementById('sizeSlider');
@@ -16,7 +18,8 @@ const transformGroup = document.getElementById('transform-group');
 const btnUndo = document.getElementById('btnUndo');
 const btnRedo = document.getElementById('btnRedo');
 const btnClear = document.getElementById('btnClear');
-const btnExport = document.getElementById('btnExport');
+const btnExportSvg = document.getElementById('btnExportSvg');
+const btnExportPng = document.getElementById('btnExportPng');
 
 const pointOptions = document.getElementById('pointOptions');
 const btnSharp = document.getElementById('btnSharp');
@@ -26,6 +29,19 @@ const btnDeletePoint = document.getElementById('btnDeletePoint');
 const btnTheme = document.getElementById('btnTheme');
 const iconSun = document.getElementById('iconSun');
 const iconMoon = document.getElementById('iconMoon');
+
+const modalOverlay = document.getElementById('modal-overlay');
+const modalConfirm = document.getElementById('modal-confirm');
+const modalCancel  = document.getElementById('modal-cancel');
+
+let modalCallback = null;
+modalConfirm.addEventListener('click', () => { modalOverlay.classList.add('hidden'); if (modalCallback) { modalCallback(true);  modalCallback = null; } });
+modalCancel.addEventListener('click',  () => { modalOverlay.classList.add('hidden'); if (modalCallback) { modalCallback(false); modalCallback = null; } });
+
+function showConfirm(onConfirm) {
+    modalCallback = onConfirm;
+    modalOverlay.classList.remove('hidden');
+}
 
 const btnCircle = document.getElementById('btnCircle');
 const btnTriangle = document.getElementById('btnTriangle');
@@ -38,9 +54,11 @@ let state = {
     points: [], // Array of {x, y, h1: {x,y}, h2: {x,y}, type: 'sharp' | 'linked' | 'free'}
     isClosed: false,
     numRings: parseInt(ringsSlider.value, 10),
+    laneWidthFraction: 0.8,
     transformScale: 1.0,
     transformRotation: 0,
     linesOpacity: 1.0,
+    centerOffset: { x: 0, y: 0 }, // offset from the geometric centroid
 };
 
 // Selection and Dragging State
@@ -97,6 +115,7 @@ function redo() {
 function clearCanvas() {
     state.points = [];
     state.isClosed = false;
+    state.centerOffset = { x: 0, y: 0 };
     selectedPointIndex = -1;
     saveState();
     render();
@@ -115,6 +134,9 @@ function updateUIFromState() {
     sizeValue.innerText = sizePct + '%';
     rotationSlider.value = state.transformRotation;
     rotationValue.innerText = state.transformRotation + '°';
+    const lwPct = Math.round(state.laneWidthFraction * 100);
+    laneWidthSlider.value = lwPct;
+    laneWidthValue.innerText = lwPct + '%';
     const opPct = Math.round(state.linesOpacity * 100);
     linesOpacitySlider.value = opPct;
     linesOpacityValue.innerText = opPct + '%';
@@ -177,6 +199,14 @@ function attachEventListeners() {
     });
     ringsSlider.addEventListener('change', saveState);
 
+    laneWidthSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value, 10);
+        laneWidthValue.innerText = val + '%';
+        state.laneWidthFraction = val / 100;
+        render();
+    });
+    laneWidthSlider.addEventListener('change', saveState);
+
     linesOpacitySlider.addEventListener('input', (e) => {
         const val = parseInt(e.target.value, 10);
         linesOpacityValue.innerText = val + '%';
@@ -204,7 +234,8 @@ function attachEventListeners() {
     btnUndo.addEventListener('click', undo);
     btnRedo.addEventListener('click', redo);
     btnClear.addEventListener('click', clearCanvas);
-    btnExport.addEventListener('click', exportSVG);
+    btnExportSvg.addEventListener('click', exportSVG);
+    btnExportPng.addEventListener('click', exportPNG);
 
     btnSharp.addEventListener('click', () => setTypeForSelected('sharp'));
     btnLinked.addEventListener('click', () => setTypeForSelected('linked'));
@@ -293,8 +324,13 @@ function setTypeForSelected(type) {
 
 function generateShape(type) {
     if (state.points.length > 0) {
-        if (!confirm("This will replace your current shape. Continue?")) return;
+        showConfirm((ok) => { if (ok) _doGenerateShape(type); });
+        return;
     }
+    _doGenerateShape(type);
+}
+
+function _doGenerateShape(type) {
 
     const rect = canvas.getBoundingClientRect();
     const cx = rect.width / 2 || 300;
@@ -334,7 +370,8 @@ function generateShape(type) {
     }
 
     state.points = newPts;
-    state.isClosed = true; // Auto-close generated shapes
+    state.isClosed = true;
+    state.centerOffset = { x: 0, y: 0 };
     selectedPointIndex = -1;
     saveState();
     updateUIFromState();
@@ -356,8 +393,16 @@ function getSVGCoords(e) {
 }
 
 function handleMouseDown(e) {
-    if (e.button !== 0) return; 
-    
+    if (e.button !== 0) return;
+
+    if (e.target.classList.contains('center-hit')) {
+        dragTargetIndex = -1;
+        dragType = 'center';
+        dragStartCoords = getSVGCoords(e);
+        dragStartPt = { x: state.centerOffset.x, y: state.centerOffset.y };
+        return;
+    }
+
     if (e.target.classList.contains('handle')) {
         dragTargetIndex = parseInt(e.target.getAttribute('data-index'), 10);
         dragType = e.target.getAttribute('data-type');
@@ -451,6 +496,14 @@ function handleMouseDown(e) {
 }
 
 function handleMouseMove(e) {
+    if (dragType === 'center' && dragStartCoords) {
+        const coords = getSVGCoords(e);
+        state.centerOffset.x = dragStartPt.x + (coords.x - dragStartCoords.x);
+        state.centerOffset.y = dragStartPt.y + (coords.y - dragStartCoords.y);
+        render();
+        return;
+    }
+
     if (dragTargetIndex > -1 && dragStartCoords) {
         const coords = getSVGCoords(e);
         const dx = coords.x - dragStartCoords.x;
@@ -484,11 +537,11 @@ function handleMouseMove(e) {
 }
 
 function handleMouseUp(e) {
-    if (dragTargetIndex > -1) {
+    if (dragTargetIndex > -1 || dragType === 'center') {
         dragTargetIndex = -1;
         dragStartCoords = null;
         dragType = null;
-        saveState(); 
+        saveState();
         updateUIFromState();
     }
 }
@@ -524,6 +577,21 @@ function getBezierPath(pts, isClosed) {
     return pathStr;
 }
 
+// Returns a bezier path string for the shape scaled toward (cx,cy) by `scale`.
+// At scale=1 the path is identical to the original; at scale=0 it collapses
+// to the centroid. Used to draw each inner ring as a shrinking version of the
+// outer shape so rings fill all the way to the centre rather than stopping at
+// the narrowest point.
+function getScaledPath(pts, cx, cy, scale) {
+    const sp = pts.map(pt => ({
+        x:  cx + (pt.x  - cx) * scale,
+        y:  cy + (pt.y  - cy) * scale,
+        h1: { x: cx + (pt.h1.x - cx) * scale, y: cy + (pt.h1.y - cy) * scale },
+        h2: { x: cx + (pt.h2.x - cx) * scale, y: cy + (pt.h2.y - cy) * scale },
+    }));
+    return getBezierPath(sp, true);
+}
+
 function render() {
     layerPoints.innerHTML = '';
     layerPath.innerHTML = '';
@@ -551,41 +619,40 @@ function render() {
     const exteriorColor = `rgba(136,136,136,${state.linesOpacity})`;
     layerPath.innerHTML = `<path d="${mainPathStr}" class="main-path ${!state.isClosed ? 'incomplete-path' : ''}" style="fill:none; stroke-width:${lineW_svg}; stroke:${exteriorColor}" />`;
 
-    // 2. Draw inset rings using SVG stroke trick for perfectly uniform lane widths.
-    // Instead of scaling (which distorts irregular shapes), we draw the same path
-    // N times with decreasing stroke widths, clipped to the shape interior.
-    // The browser's native stroke renderer handles Bezier curves perfectly.
+    // 2. Draw inset rings as centroid-scaled copies of the outer shape.
+    // Each ring is a proportionally smaller version shrunk toward the centroid,
+    // so they fill all the way to the centre and naturally morph toward a circle
+    // as scale → 0 — handling concave/narrow shapes gracefully.
     if (state.isClosed && state.points.length > 2) {
-        const cx = state.points.reduce((s, p) => s + p.x, 0) / state.points.length;
-        const cy = state.points.reduce((s, p) => s + p.y, 0) / state.points.length;
-        // Use average distance from centroid to estimate the interior "radius",
-        // giving us a stroke width that fills the interior with equal-width lanes.
-        const avgRadius = state.points.reduce((s, p) => s + Math.hypot(p.x - cx, p.y - cy), 0) / state.points.length;
-        const totalStrokeW = avgRadius * 2;
-        const laneW = totalStrokeW / state.numRings;
+        const autoCx = state.points.reduce((s, p) => s + p.x, 0) / state.points.length;
+        const autoCy = state.points.reduce((s, p) => s + p.y, 0) / state.points.length;
+        const cx = autoCx + state.centerOffset.x;
+        const cy = autoCy + state.centerOffset.y;
 
-        const accentColor = '#ffffff';
         const o = state.linesOpacity;
         const gapColor = `rgba(68,68,68,${o})`;
 
         let html = `<defs><clipPath id="shape-clip"><path d="${mainPathStr}" /></clipPath></defs>`;
         html += `<g clip-path="url(#shape-clip)">`;
 
-        // Step 1: flood the entire interior with the accent color.
-        html += `<path d="${mainPathStr}" fill="none" stroke="${accentColor}" stroke-width="${totalStrokeW}" stroke-linejoin="round" stroke-linecap="round" />`;
+        // Flood entire interior white.
+        html += `<path d="${mainPathStr}" fill="#ffffff" stroke="none" />`;
 
-        // Step 2: for each lane boundary (N-1 of them), carve a dark gap then restore
-        // the accent inside it. Processing outermost-to-innermost keeps strokes in
-        // strictly decreasing order so each new layer only affects the inner region.
-        // Each gap is centred at visual depth i * laneW/2 from the outer boundary.
-        // lineW_svg is already scale-compensated so the gap stays at a fixed pixel width.
+        // Draw N-1 gap lines as centroid-scaled copies of the outer shape.
+        // laneWidthFraction controls how deep the rings reach: at 1.0 the innermost
+        // ring is at scale 1/N (near centroid); lower values leave more white centre.
+        const minScale = 1 - state.laneWidthFraction;
         for (let i = state.numRings - 1; i >= 1; i--) {
-            html += `<path d="${mainPathStr}" fill="none" stroke="${gapColor}"   stroke-width="${i * laneW + lineW_svg}" stroke-linejoin="round" stroke-linecap="round" />`;
-            html += `<path d="${mainPathStr}" fill="none" stroke="${accentColor}" stroke-width="${i * laneW - lineW_svg}" stroke-linejoin="round" stroke-linecap="round" />`;
+            const scale = minScale + (1 - minScale) * i / state.numRings;
+            const scaledPath = getScaledPath(state.points, cx, cy, scale);
+            html += `<path d="${scaledPath}" fill="none" stroke="${gapColor}" stroke-width="${lineW_svg}" stroke-linejoin="round" stroke-linecap="round" />`;
         }
 
         html += `</g>`;
         layerRings.innerHTML = html;
+
+        layerRings._centerX = cx;
+        layerRings._centerY = cy;
     }
 
     // 3. Draw Handles for Selected Point First (if not sharp)
@@ -627,6 +694,19 @@ function render() {
         circle.setAttribute("pointer-events", "none");
         layerPoints.appendChild(circle);
     });
+
+    // Center origin marker — drawn last so it sits above all node points
+    if (state.isClosed && state.points.length > 2) {
+        const cx = layerRings._centerX;
+        const cy = layerRings._centerY;
+        const arm = 7  / state.transformScale;
+        const cr  = 3.5 / state.transformScale;
+        layerPoints.innerHTML +=
+            `<circle cx="${cx}" cy="${cy}" r="${arm * 1.8}" class="center-hit" />` +
+            `<line x1="${cx - arm}" y1="${cy}" x2="${cx + arm}" y2="${cy}" class="center-marker" />` +
+            `<line x1="${cx}" y1="${cy - arm}" x2="${cx}" y2="${cy + arm}" class="center-marker" />` +
+            `<circle cx="${cx}" cy="${cy}" r="${cr}" class="center-marker" />`;
+    }
 }
 
 // =======================
@@ -671,4 +751,60 @@ function exportSVG() {
     downloadLink.click();
     document.body.removeChild(downloadLink);
     URL.revokeObjectURL(svgUrl);
+}
+
+function exportPNG() {
+    const scale = 2; // 2× for crisp output
+    const rect  = canvas.getBoundingClientRect();
+    const w = rect.width  * scale;
+    const h = rect.height * scale;
+
+    // Build a clean SVG clone with white background, no points layer
+    const clonedSvg = canvas.cloneNode(true);
+    clonedSvg.querySelector('#layer-points')?.remove();
+    clonedSvg.setAttribute('width',  w);
+    clonedSvg.setAttribute('height', h);
+    clonedSvg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+
+    // White background rect so the PNG isn't transparent
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('width', rect.width);
+    bg.setAttribute('height', rect.height);
+    bg.setAttribute('fill', '#ffffff');
+    clonedSvg.insertBefore(bg, clonedSvg.firstChild);
+
+    // Fix up exterior path inline style (uses CSS vars which won't resolve off-DOM)
+    const ext = clonedSvg.querySelector('.main-path');
+    if (ext) {
+        ext.setAttribute('fill', 'none');
+        ext.setAttribute('stroke', '#888888');
+        ext.setAttribute('stroke-width', 2 / state.transformScale);
+        ext.removeAttribute('style');
+    }
+
+    let source = new XMLSerializer().serializeToString(clonedSvg);
+    if (!source.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+
+    const img = new Image();
+    const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+
+    img.onload = () => {
+        const offscreen = document.createElement('canvas');
+        offscreen.width  = w;
+        offscreen.height = h;
+        const ctx = offscreen.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+
+        const a = document.createElement('a');
+        a.download = 'labyrinth-pattern.png';
+        a.href = offscreen.toDataURL('image/png');
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
+    img.src = url;
 }
