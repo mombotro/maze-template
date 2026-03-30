@@ -140,22 +140,45 @@ header p {
 
 .kofi-btn {
   display: inline-block;
-  position: absolute;
-  bottom: 1rem;
-  right: 1.125rem;
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 999;
   background: #00d9ff;
-  color: #000;
-  font-size: 0.6rem;
-  font-family: 'Courier Prime', monospace;
-  letter-spacing: 0.05em;
-  padding: 0.25rem 0.5rem;
-  border-radius: 3px;
+  color: #1a1a2e;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  letter-spacing: normal;
+  padding: 8px 16px;
+  border-radius: 4px;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.3s ease;
 }
 
 .kofi-btn:hover {
-  background: #33e4ff;
+  background: #00b8d4;
+  transform: translateY(-2px);
+}
+
+.page-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  padding: 8px;
+  font-size: 13px;
+  color: #888;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.page-footer a {
+  color: #aaa;
+  pointer-events: all;
 }
 
 /* ── Panel sections ──────────────────────── */
